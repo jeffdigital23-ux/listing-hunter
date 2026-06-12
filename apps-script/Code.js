@@ -487,7 +487,12 @@ function formatDashboardDate_(value) {
 }
 
 function buildActionDashboardHtml_(initialData) {
-  const initialJson = dashboardJson_(initialData || {ok: false, error: 'Dashboard data was not prepared.'});
+  const data = initialData || {ok: false, error: 'Dashboard data was not prepared.'};
+  const initialJson = dashboardJson_(data);
+  const generatedText = data && data.generatedAt ? `Updated ${data.generatedAt}` : 'Dashboard loaded from server';
+  const debugHtml = buildDashboardHealthHtml_(data);
+  const summaryHtml = buildDashboardSummaryHtml_(data);
+  const queueHtml = buildDashboardQueueHtml_(data);
   return `
 <!doctype html>
 <html>
@@ -499,20 +504,29 @@ function buildActionDashboardHtml_(initialData) {
   </style>
 </head>
 <body>
-  <header><h1>Jeff Action Dashboard</h1><div id="generated" class="muted" style="color:#dbe7ff">Loading...</div></header>
+  <header><h1>Jeff Action Dashboard</h1><div id="generated" class="muted" style="color:#dbe7ff">${escapeHtmlServer_(generatedText)}</div></header>
   <div class="wrap">
-    <div id="debug" class="debug">Loading dashboard data...</div>
-    <div id="summary" class="summary"><div class="tile"><div class="muted">Loading</div><b>...</b></div></div>
-    <div id="queue"><div class="card">Loading dashboard data...</div></div>
+    <div id="debug" class="debug">${debugHtml}</div>
+    <div id="summary" class="summary">${summaryHtml}</div>
+    <div id="queue">${queueHtml}</div>
   </div>
   <div id="toast" class="toast"></div>
 <script>
 const INITIAL_DASHBOARD_DATA=${initialJson};
 const actionLabels={sent:'Mark Sent',replied:'Replied',no_reply:'No Reply',not_interested:'Not Interested',do_not_contact:'Do Not Contact'};
-function init(){render(INITIAL_DASHBOARD_DATA);refreshData();}
+function init(){
+  setTimeout(refreshData, 250);
+}
 function refreshData(){
-  if(typeof google==='undefined'||!google.script||!google.script.run){showError('Dashboard opened, but google.script.run is not available. Server-rendered data is shown below. Try normal browser window if refresh does not work.');return;}
+  if(typeof google==='undefined'||!google.script||!google.script.run){
+    setConnectionNote('Server-rendered data is showing. Live refresh is not available in this browser session.');
+    return;
+  }
   google.script.run.withSuccessHandler(render).withFailureHandler(showError).getActionDashboardData();
+}
+function setConnectionNote(note){
+  const debug=document.getElementById('debug');
+  if(debug && note){debug.innerHTML=debug.innerHTML+'<br>'+escapeHtml(note);}
 }
 function render(data){
   if(!data||!data.ok){showError(data&&data.error?data.error:'Unable to load dashboard data');return;}
@@ -541,14 +555,15 @@ function cardHtml(item){
     +'</div></div>';
 }
 function updateAction(safeId,ownerId,rowNumber,action){
+  if(typeof google==='undefined'||!google.script||!google.script.run){showError('Cannot update from this browser session because google.script.run is unavailable. Open the dashboard while signed in to the same Google account.');return;}
   const note=document.getElementById('note-'+safeId).value;
   const interest=document.getElementById('interest-'+safeId).value;
   showToast('Updating...');
-  google.script.run.withSuccessHandler(res=>{showToast(res.message||'Updated');refreshData();}).withFailureHandler(showError).updateDashboardAction({ownerId,rowNumber,action,note,interest});
+  google.script.run.withSuccessHandler(res=>{if(!res.ok){showError(res.message);return;}showToast('Updated');refreshData();}).withFailureHandler(showError).updateDashboardAction({ownerId,rowNumber,action,note,interest});
 }
 function showError(err){
   const msg=err&&err.message?err.message:String(err||'Unknown dashboard error');
-  document.getElementById('queue').innerHTML='<div class="card error"><b>Dashboard data connection failed</b><br>'+escapeHtml(msg)+'</div>';
+  document.getElementById('queue').innerHTML='<div class="card error"><b>Dashboard data connection failed</b><br>'+escapeHtml(msg)+'</div>'+document.getElementById('queue').innerHTML;
   document.getElementById('debug').innerHTML='Error shown at '+new Date().toLocaleString();
   showToast(msg);
 }
@@ -560,6 +575,79 @@ init();
 </script>
 </body>
 </html>`;
+}
+
+function buildDashboardSummaryHtml_(data) {
+  if (!data || !data.ok) return '<div class="tile"><div class="muted">Error</div><b>!</b></div>';
+  const summary = data.summary || {};
+  return [
+    ['Total', summary.total || 0],
+    ['Pending', summary.pending || 0],
+    ['Sent', summary.sent || 0],
+    ['Replied', summary.replied || 0],
+  ].map(([label, value]) => `<div class="tile"><div class="muted">${escapeHtmlServer_(label)}</div><b>${escapeHtmlServer_(value)}</b></div>`).join('');
+}
+
+function buildDashboardHealthHtml_(data) {
+  const health = data && data.health || {};
+  if (!data || !data.ok) {
+    return `Dashboard error: ${escapeHtmlServer_(data && data.error || 'Unknown error')}<br>Server time: ${escapeHtmlServer_(health.serverTime || new Date().toISOString())}`;
+  }
+  return `Sheet: ${escapeHtmlServer_(health.spreadsheetName || '')}<br>Server time: ${escapeHtmlServer_(health.serverTime || '')}<br>Today queue rows: ${escapeHtmlServer_(health.todayQueueCount == null ? (data.queue || []).length : health.todayQueueCount)}<br>Active targets: ${escapeHtmlServer_(health.activeTargetCount == null ? '' : health.activeTargetCount)}<br>Dashboard enabled: ${escapeHtmlServer_(health.dashboardEnabled || 'TRUE')}<br><span class="muted">Initial data is rendered by the server. Buttons use live Google Apps Script connection.</span>`;
+}
+
+function buildDashboardQueueHtml_(data) {
+  if (!data || !data.ok) {
+    return `<div class="card error"><b>Dashboard data connection failed</b><br>${escapeHtmlServer_(data && data.error || 'Unknown dashboard error')}</div>`;
+  }
+  const queue = data.queue || [];
+  if (!queue.length) {
+    return '<div class="card"><b>No queue yet.</b><br><span class="muted">Run: Listing Hunter → Run morning batch now. If it still shows 0, check TARGET_LISTINGS Active status and phone validity.</span></div>';
+  }
+  return queue.map(buildDashboardQueueCardHtml_).join('');
+}
+
+function buildDashboardQueueCardHtml_(item) {
+  const safeId = String(item.ownerId || '').replace(/[^A-Za-z0-9_-]/g, '_');
+  const buttonHtml = [
+    ['sent', 'Mark Sent', ''],
+    ['replied', 'Replied', 'ok'],
+    ['no_reply', 'No Reply', ''],
+    ['not_interested', 'Not Interested', 'warn'],
+    ['do_not_contact', 'Do Not Contact', 'warn'],
+  ].map(([action, label, tone]) => {
+    return `<button class="btn ${tone}" onclick="updateAction('${escapeJsStringServer_(safeId)}','${escapeJsStringServer_(item.ownerId)}',${Number(item.rowNumber || 0)},'${action}')">${escapeHtmlServer_(label)}</button>`;
+  }).join('');
+  return `<div class="card" id="card-${escapeAttrServer_(safeId)}">
+    <div><span class="status">${escapeHtmlServer_(item.queueStatus || 'To Send')}</span> <span class="muted">${escapeHtmlServer_(item.batch || 'Manual')} #${escapeHtmlServer_(item.no || '')}</span></div>
+    <div class="property">${escapeHtmlServer_(item.propertyName || 'Unknown property')}</div>
+    <div class="muted">${escapeHtmlServer_(item.ownerName || 'Owner')} · ${escapeHtmlServer_(item.phone || '')} → ${escapeHtmlServer_(item.whatsappPhone || '')} · ${escapeHtmlServer_(item.propertyType || '')}</div>
+    <div class="msg">${escapeHtmlServer_(item.message || '')}</div>
+    <a class="btn primary" href="${escapeAttrServer_(item.whatsappLink || '#')}" target="_blank">Open WhatsApp</a>
+    <div class="controls">
+      <select id="interest-${escapeAttrServer_(safeId)}"><option value="">Interest / Reply Type</option><option>Want Rent</option><option>Want Sell</option><option>Maybe</option><option>No</option></select>
+      <textarea id="note-${escapeAttrServer_(safeId)}" rows="2" placeholder="Short note, e.g. owner wants rent RM1800"></textarea>
+      ${buttonHtml}
+    </div>
+  </div>`;
+}
+
+function escapeHtmlServer_(value) {
+  return String(value == null ? '' : value).replace(/[&<>'"]/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    "'": '&#39;',
+    '"': '&quot;',
+  }[char]));
+}
+
+function escapeAttrServer_(value) {
+  return escapeHtmlServer_(value);
+}
+
+function escapeJsStringServer_(value) {
+  return String(value == null ? '' : value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
 function dashboardJson_(data) {
