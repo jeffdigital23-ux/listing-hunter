@@ -436,3 +436,13 @@ Landline / office numbers such as `603...` are skipped and marked in `OWNER_DATA
 4. After sending, return to the dashboard and tap `Mark Sent`.
 5. If the owner replies, mark `Replied` and add a short note.
 6. At 9pm, read the summary report to see how many were queued, sent, replied, still not sent, and how many contacts remain.
+
+### Dashboard blank screen fix behavior
+
+V1.2 dashboard now renders server-side data first. If the browser cannot refresh with `google.script.run`, Jeff should still see one of these visible states instead of a blank page:
+
+- summary tiles and queue cards,
+- `No queue yet` with instructions,
+- or `Dashboard data connection failed` with the error text.
+
+After pasting this version, deploy the Web App as a **New version** again.

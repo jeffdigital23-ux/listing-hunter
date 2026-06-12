@@ -285,7 +285,28 @@ function doGet() {
       .setTitle('Jeff Action Dashboard')
       .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
   }
-  return HtmlService.createHtmlOutput(buildActionDashboardHtml_())
+
+  let initialData;
+  try {
+    initialData = getActionDashboardData();
+  } catch (err) {
+    initialData = {
+      ok: false,
+      generatedAt: new Date().toISOString(),
+      queue: [],
+      summary: {total: 0, sent: 0, replied: 0, pending: 0, dnc: 0},
+      health: {
+        spreadsheetName: ss.getName(),
+        serverTime: new Date().toISOString(),
+        todayQueueCount: 0,
+        activeTargetCount: 0,
+        dashboardEnabled: settings.DASHBOARD_ENABLED || 'TRUE',
+      },
+      error: err && err.message ? err.message : String(err),
+    };
+  }
+
+  return HtmlService.createHtmlOutput(buildActionDashboardHtml_(initialData))
     .setTitle('Jeff Action Dashboard')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
@@ -297,7 +318,14 @@ function getActionDashboardData() {
   const queueSheet = ss.getSheetByName(SHEETS.queue);
   const values = queueSheet.getDataRange().getValues();
   if (values.length < 2) {
-    return {ok: true, generatedAt: new Date().toISOString(), queue: [], summary: getDashboardSummary_(ss), settings};
+    return {
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      queue: [],
+      summary: getDashboardSummary_(ss),
+      settings,
+      health: getDashboardHealth_(ss, 0, settings),
+    };
   }
   const headers = values[0];
   const todayKey = dateKey_(new Date());
@@ -323,7 +351,31 @@ function getActionDashboardData() {
       reason: item.Reason || '',
     };
   });
-  return {ok: true, generatedAt: new Date().toISOString(), queue, summary: getDashboardSummary_(ss), settings};
+  return {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    queue,
+    summary: getDashboardSummary_(ss),
+    settings,
+    health: getDashboardHealth_(ss, queue.length, settings),
+  };
+}
+
+function getDashboardHealth_(ss, todayQueueCount, settings) {
+  let activeTargetCount = 0;
+  try {
+    const targets = getActiveTargets_(ss);
+    activeTargetCount = targets ? targets.length : 0;
+  } catch (err) {
+    activeTargetCount = 0;
+  }
+  return {
+    spreadsheetName: ss.getName(),
+    serverTime: new Date().toISOString(),
+    todayQueueCount: todayQueueCount || 0,
+    activeTargetCount,
+    dashboardEnabled: settings && settings.DASHBOARD_ENABLED || 'TRUE',
+  };
 }
 
 function updateDashboardAction(payload) {
@@ -434,7 +486,8 @@ function formatDashboardDate_(value) {
   return String(value || '');
 }
 
-function buildActionDashboardHtml_() {
+function buildActionDashboardHtml_(initialData) {
+  const initialJson = dashboardJson_(initialData || {ok: false, error: 'Dashboard data was not prepared.'});
   return `
 <!doctype html>
 <html>
@@ -442,26 +495,36 @@ function buildActionDashboardHtml_() {
   <base target="_top">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    body{font-family:Arial,sans-serif;margin:0;background:#f6f8fb;color:#1f1f1f}header{position:sticky;top:0;background:#0b57d0;color:#fff;padding:14px 16px;z-index:2}h1{font-size:20px;margin:0}.wrap{padding:14px}.summary{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px}.tile{background:#fff;border-radius:12px;padding:12px;box-shadow:0 1px 4px #d7dce5}.tile b{font-size:22px}.card{background:#fff;border-radius:14px;padding:14px;margin-bottom:12px;box-shadow:0 1px 5px #d7dce5}.muted{color:#666;font-size:13px}.property{font-weight:bold;font-size:16px}.msg{white-space:pre-wrap;background:#f1f4f9;border-radius:10px;padding:10px;margin:10px 0;font-size:13px}.btn{display:inline-block;border:0;border-radius:10px;padding:10px 12px;margin:4px 3px;background:#e8eefc;color:#0b57d0;font-weight:bold;text-decoration:none}.btn.primary{background:#0b57d0;color:#fff}.btn.warn{background:#fde8e8;color:#b42318}.btn.ok{background:#e7f6ec;color:#067647}.controls{margin-top:8px}textarea,select{width:100%;box-sizing:border-box;border:1px solid #ccd3df;border-radius:10px;padding:10px;margin-top:8px}.status{font-size:12px;border-radius:999px;padding:4px 8px;background:#eef2f7;display:inline-block}.toast{position:fixed;left:12px;right:12px;bottom:12px;background:#202124;color:#fff;border-radius:10px;padding:12px;display:none}button:disabled{opacity:.5}
+    body{font-family:Arial,sans-serif;margin:0;background:#f6f8fb;color:#1f1f1f}header{position:sticky;top:0;background:#0b57d0;color:#fff;padding:14px 16px;z-index:2}h1{font-size:20px;margin:0}.wrap{padding:14px}.summary{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px}.tile{background:#fff;border-radius:12px;padding:12px;box-shadow:0 1px 4px #d7dce5}.tile b{font-size:22px}.card{background:#fff;border-radius:14px;padding:14px;margin-bottom:12px;box-shadow:0 1px 5px #d7dce5}.muted{color:#666;font-size:13px}.property{font-weight:bold;font-size:16px}.msg{white-space:pre-wrap;background:#f1f4f9;border-radius:10px;padding:10px;margin:10px 0;font-size:13px}.btn{display:inline-block;border:0;border-radius:10px;padding:10px 12px;margin:4px 3px;background:#e8eefc;color:#0b57d0;font-weight:bold;text-decoration:none}.btn.primary{background:#0b57d0;color:#fff}.btn.warn{background:#fde8e8;color:#b42318}.btn.ok{background:#e7f6ec;color:#067647}.controls{margin-top:8px}textarea,select{width:100%;box-sizing:border-box;border:1px solid #ccd3df;border-radius:10px;padding:10px;margin-top:8px}.status{font-size:12px;border-radius:999px;padding:4px 8px;background:#eef2f7;display:inline-block}.toast{position:fixed;left:12px;right:12px;bottom:12px;background:#202124;color:#fff;border-radius:10px;padding:12px;display:none}.error{background:#fff1f0;color:#b42318;border:1px solid #fecdca}.debug{font-size:12px;color:#555;background:#eef2f7;border-radius:10px;padding:10px;margin-bottom:12px}button:disabled{opacity:.5}
   </style>
 </head>
 <body>
-  <header><h1>Jeff Action Dashboard</h1><div id="generated" class="muted" style="color:#dbe7ff"></div></header>
+  <header><h1>Jeff Action Dashboard</h1><div id="generated" class="muted" style="color:#dbe7ff">Loading...</div></header>
   <div class="wrap">
-    <div id="summary" class="summary"></div>
-    <div id="queue"></div>
+    <div id="debug" class="debug">Loading dashboard data...</div>
+    <div id="summary" class="summary"><div class="tile"><div class="muted">Loading</div><b>...</b></div></div>
+    <div id="queue"><div class="card">Loading dashboard data...</div></div>
   </div>
   <div id="toast" class="toast"></div>
 <script>
+const INITIAL_DASHBOARD_DATA=${initialJson};
 const actionLabels={sent:'Mark Sent',replied:'Replied',no_reply:'No Reply',not_interested:'Not Interested',do_not_contact:'Do Not Contact'};
-function load(){google.script.run.withSuccessHandler(render).withFailureHandler(showError).getActionDashboardData();}
+function init(){render(INITIAL_DASHBOARD_DATA);refreshData();}
+function refreshData(){
+  if(typeof google==='undefined'||!google.script||!google.script.run){showError('Dashboard opened, but google.script.run is not available. Server-rendered data is shown below. Try normal browser window if refresh does not work.');return;}
+  google.script.run.withSuccessHandler(render).withFailureHandler(showError).getActionDashboardData();
+}
 function render(data){
-  if(!data||!data.ok){showToast('Unable to load dashboard');return;}
+  if(!data||!data.ok){showError(data&&data.error?data.error:'Unable to load dashboard data');return;}
   document.getElementById('generated').textContent='Updated '+new Date(data.generatedAt).toLocaleString();
+  renderHealth(data.health||{}, data.queue||[]);
   const s=data.summary||{};
   document.getElementById('summary').innerHTML=[['Total',s.total||0],['Pending',s.pending||0],['Sent',s.sent||0],['Replied',s.replied||0]].map(([k,v])=>'<div class="tile"><div class="muted">'+k+'</div><b>'+v+'</b></div>').join('');
   const queue=data.queue||[];
-  document.getElementById('queue').innerHTML=queue.length?queue.map(cardHtml).join(''):'<div class="card">No queue yet. Run daily report first.</div>';
+  document.getElementById('queue').innerHTML=queue.length?queue.map(cardHtml).join(''):'<div class="card"><b>No queue yet.</b><br><span class="muted">Run: Listing Hunter → Run morning batch now. If it still shows 0, check TARGET_LISTINGS Active status and phone validity.</span></div>';
+}
+function renderHealth(h, queue){
+  document.getElementById('debug').innerHTML='Sheet: '+escapeHtml(h.spreadsheetName||'')+'<br>Server time: '+escapeHtml(h.serverTime||'')+'<br>Today queue rows: '+escapeHtml(h.todayQueueCount==null?queue.length:h.todayQueueCount)+'<br>Active targets: '+escapeHtml(h.activeTargetCount==null?'':h.activeTargetCount)+'<br>Dashboard enabled: '+escapeHtml(h.dashboardEnabled||'TRUE');
 }
 function cardHtml(item){
   const safeId=String(item.ownerId||'').replace(/[^A-Za-z0-9_-]/g,'_');
@@ -481,18 +544,28 @@ function updateAction(safeId,ownerId,rowNumber,action){
   const note=document.getElementById('note-'+safeId).value;
   const interest=document.getElementById('interest-'+safeId).value;
   showToast('Updating...');
-  google.script.run.withSuccessHandler(res=>{showToast(res.message||'Updated');load();}).withFailureHandler(showError).updateDashboardAction({ownerId,rowNumber,action,note,interest});
+  google.script.run.withSuccessHandler(res=>{showToast(res.message||'Updated');refreshData();}).withFailureHandler(showError).updateDashboardAction({ownerId,rowNumber,action,note,interest});
 }
-function showError(err){showToast(err&&err.message?err.message:String(err));}
+function showError(err){
+  const msg=err&&err.message?err.message:String(err||'Unknown dashboard error');
+  document.getElementById('queue').innerHTML='<div class="card error"><b>Dashboard data connection failed</b><br>'+escapeHtml(msg)+'</div>';
+  document.getElementById('debug').innerHTML='Error shown at '+new Date().toLocaleString();
+  showToast(msg);
+}
 function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',3500);}
 function escapeHtml(v){return String(v||'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
 function escapeAttr(v){return escapeHtml(v);}
 function escapeJs(v){return String(v||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
-load();
+init();
 </script>
 </body>
 </html>`;
 }
+
+function dashboardJson_(data) {
+  return JSON.stringify(data || {}).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
+}
+
 
 function generateAdCopyForActiveListings() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();

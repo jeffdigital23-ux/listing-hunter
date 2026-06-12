@@ -384,3 +384,13 @@ Reset today queue (careful)
 ```
 
 才会清空今天 queue。
+
+### 如果 Dashboard 只有蓝色 header / 空白
+
+新版 dashboard 会先显示 server-side fallback。更新 code 后一定要：
+
+```text
+Deploy -> Manage deployments -> Edit -> Version: New version -> Deploy
+```
+
+如果没有 queue，也应该看到 `No queue yet`，不会再只有空白页面。
